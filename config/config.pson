@@ -1,0 +1,71 @@
+server {
+    host = "127.0.0.1"
+    port = 9100
+    static_dir = "web"
+    data_dir = "data"
+    log_level = "info"
+    max_connections = 64
+    thread_pool_size = 4
+    tls_enabled = true
+    tls_cert = "tls/server.crt"
+    tls_key = "tls/server.key"
+}
+
+app {
+    name = "Metis Exterminator Plus"
+    version = "2.3.6"
+    company = "Your Company Name"
+    currency = "USD"
+    invoice_prefix = "INV"
+    next_invoice_number = 1000
+    session_timeout_minutes = 60
+    bcrypt_cost = 12
+}
+
+database {
+    path = "data/metis_exterminator.db"
+    wal_mode = true
+    cache_size_kb = 4096
+    busy_timeout_ms = 5000
+}
+
+tax {
+    default_rate = 0.0875
+    name = "Sales Tax"
+}
+
+infra {
+    gpu_enabled = false
+    gpu_vendor = "auto"
+    kubernetes_enabled = false
+    kubernetes_namespace = "metis"
+    containers_enabled = false
+    container_runtime = "none"
+}
+
+auth {
+    admin_user = "admin"
+    admin_password = "Admin#2026"
+    admin_role = "admin"
+    require_login = true
+    max_login_attempts = 5
+    lockout_minutes = 15
+}
+
+logging {
+    level = "info"
+    file = "logs/metis_exterminator.log"
+    max_size_mb = 10
+    max_files = 5
+    structured = true
+}
+
+session {
+    purge_interval_minutes = 10
+}
+
+client {
+    theme = "dark"
+    session_storage_key = "mep_session_token"
+    theme_storage_key = "mep_theme"
+}

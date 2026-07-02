@@ -1,0 +1,48 @@
+MIT License
+
+Copyright (c) 2026 Bennie Shearer (Retired)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------------
+DISCLAIMER
+
+This software provides Metis Exterminator Plus capabilities.
+Users are responsible for proper configuration, security testing,
+and compliance with applicable regulations and licensing requirements.
+------------------------------------------------------------------------------
+
+Third-Party Licenses
+--------------------
+
+SQLite (third_party/sqlite/)
+  The author disclaims copyright to the SQLite source code.
+  Public domain. https://sqlite.org/copyright.html
+
+bcrypt / crypt_blowfish (third_party/bcrypt/)
+  Solar Designer implementation. Public domain.
+  Wrapper: Ricardo Garcia, CC0. https://creativecommons.org/publicdomain/zero/1.0/
+
+nlohmann/json (third_party/nlohmann/)
+  Copyright (c) 2013-2022 Niels Lohmann. MIT License.
+  https://github.com/nlohmann/json
+
+OpenSSL (openssl-prebuilt/)
+  Copyright (c) 1998-2026 The OpenSSL Project. Apache License 2.0.
+  https://www.openssl.org/

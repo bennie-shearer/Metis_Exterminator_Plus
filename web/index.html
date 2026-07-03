@@ -19,6 +19,9 @@
     <button class="nav-btn" data-view="customers">Customers</button>
     <button class="nav-btn" data-view="jobs">Jobs</button>
     <button class="nav-btn" data-view="invoices">Invoices</button>
+    <button class="nav-btn" data-view="calendar">Calendar</button>
+    <button class="nav-btn" data-view="search">Search</button>
+    <button class="nav-btn" data-view="route">Route</button>
     <button class="nav-btn" data-view="admin" id="nav-admin" style="display:none">Admin</button>
     <button class="nav-btn" data-view="syslog" id="nav-syslog" style="display:none">System Log</button>
     <button class="nav-btn" data-view="auditlog" id="nav-auditlog" style="display:none">Audit Log</button>
@@ -99,6 +102,7 @@
     <div class="page-header">
       <h1>Customers</h1>
       <button class="btn-primary" id="btn-new-customer">+ New customer</button>
+      <button class="btn-secondary" id="btn-export-customers-csv" title="Export customers to CSV">&#8595; CSV</button>
     </div>
     <div class="search-bar">
       <input type="text" id="customer-search" placeholder="Search by name, phone, or email" autocomplete="off">
@@ -137,6 +141,8 @@
     <div class="page-header">
       <h1>Invoices</h1>
       <button class="btn-primary" id="btn-new-invoice">+ New invoice</button>
+      <button class="btn-secondary" id="btn-check-overdue" title="Mark overdue invoices">&#9888; Check overdue</button>
+      <button class="btn-secondary" id="btn-export-invoices-csv" title="Export invoices to CSV">&#8595; CSV</button>
     </div>
     <div id="invoices-list"></div>
   </div>
@@ -201,6 +207,48 @@
       </div>
     </div>
     <div id="auditlog-content" class="log-viewer"></div>
+  </div>
+  <div id="view-calendar" class="view">
+    <div class="security-bar">
+      <span class="sec-pill pill-tls">TLS 1.3</span>
+      <span class="sec-pill pill-aes">AES-256-GCM</span>
+      <span class="sec-pill pill-pq">Post-Quantum TLS</span>
+    </div>
+    <div class="page-header"><h1>Calendar</h1><div><button class="btn-secondary btn-sm" id="cal-prev">&#8592;</button><span id="cal-month-label" style="margin:0 1rem;font-weight:500"></span><button class="btn-secondary btn-sm" id="cal-next">&#8594;</button></div>
+      <button class="btn-secondary btn-sm" onclick="window.print()" title="Print calendar">&#128438; Print / PDF</button></div>
+    <div id="calendar-grid" class="calendar-grid"></div>
+  </div>
+
+  <div id="view-search" class="view">
+    <div class="security-bar">
+      <span class="sec-pill pill-tls">TLS 1.3</span>
+      <span class="sec-pill pill-aes">AES-256-GCM</span>
+      <span class="sec-pill pill-pq">Post-Quantum TLS</span>
+    </div>
+    <div class="page-header"><h1>Search</h1></div>
+    <div class="search-bar" style="max-width:600px;margin-bottom:1.5rem">
+      <input type="text" id="fts-search-input" placeholder="Search customers and jobs..." autocomplete="off">
+    </div>
+    <div id="fts-results"></div>
+  </div>
+  <div id="view-route" class="view">
+    <div class="security-bar">
+      <span class="sec-pill pill-tls">TLS 1.3</span>
+      <span class="sec-pill pill-aes">AES-256-GCM</span>
+      <span class="sec-pill pill-pq">Post-Quantum TLS</span>
+    </div>
+    <div class="page-header">
+      <h1>Route Optimization</h1>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="date" id="route-date" style="width:auto">
+        <select id="route-tech" style="width:auto;min-width:140px">
+          <option value="">All technicians</option>
+        </select>
+        <button class="btn-secondary btn-sm" onclick="loadRouteView()">&#8635; Optimize</button>
+        <button class="btn-secondary btn-sm" onclick="window.print()">&#128438; Print</button>
+      </div>
+    </div>
+    <div id="route-content"></div>
   </div>
 </main>
 

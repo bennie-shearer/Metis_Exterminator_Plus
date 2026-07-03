@@ -60,23 +60,40 @@ CREATE TABLE IF NOT EXISTS customers (
     zip          TEXT DEFAULT '',
     notes        TEXT DEFAULT '',
     active       INTEGER DEFAULT 1,
-    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    deleted      INTEGER DEFAULT 0,
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    customer_id    INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-    service_type   TEXT NOT NULL,
-    pest_type      TEXT DEFAULT '',
-    status         TEXT DEFAULT 'Scheduled',
-    scheduled_date TEXT DEFAULT '',
-    scheduled_time TEXT DEFAULT '',
-    technician     TEXT DEFAULT '',
-    address        TEXT DEFAULT '',
-    notes          TEXT DEFAULT '',
-    price          REAL DEFAULT 0.0,
-    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-    completed_at   TEXT DEFAULT ''
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id         INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    service_type        TEXT NOT NULL,
+    pest_type           TEXT DEFAULT '',
+    status              TEXT DEFAULT 'Scheduled',
+    scheduled_date      TEXT DEFAULT '',
+    scheduled_time      TEXT DEFAULT '',
+    technician          TEXT DEFAULT '',
+    address             TEXT DEFAULT '',
+    notes               TEXT DEFAULT '',
+    price               REAL DEFAULT 0.0,
+    deleted             INTEGER DEFAULT 0,
+    recurring           INTEGER DEFAULT 0,
+    recur_interval_days INTEGER DEFAULT 0,
+    time_start          TEXT DEFAULT '',
+    time_end            TEXT DEFAULT '',
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    completed_at        TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS job_chemicals (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id        INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    chemical_name TEXT NOT NULL,
+    epa_reg       TEXT DEFAULT '',
+    quantity_oz   REAL DEFAULT 0.0,
+    unit          TEXT DEFAULT 'oz',
+    applied_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
 CREATE TABLE IF NOT EXISTS invoices (
@@ -105,12 +122,15 @@ CREATE TABLE IF NOT EXISTS invoice_items (
 );
 
 CREATE TABLE IF NOT EXISTS users (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    username     TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
     password_hash TEXT NOT NULL,
-    role         TEXT DEFAULT 'technician',
-    active       INTEGER DEFAULT 1,
-    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    role          TEXT DEFAULT 'technician',
+    active        INTEGER DEFAULT 1,
+    failed_logins INTEGER DEFAULT 0,
+    locked_until  TEXT DEFAULT '',
+    api_key       TEXT DEFAULT '',
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -120,12 +140,45 @@ CREATE TABLE IF NOT EXISTS sessions (
     expires_at   TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_jobs_customer    ON jobs(customer_id);
-CREATE INDEX IF NOT EXISTS idx_jobs_status      ON jobs(status);
-CREATE INDEX IF NOT EXISTS idx_jobs_date        ON jobs(scheduled_date);
-CREATE INDEX IF NOT EXISTS idx_invoices_customer ON invoices(customer_id);
-CREATE INDEX IF NOT EXISTS idx_invoices_status  ON invoices(status);
-CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+CREATE TABLE IF NOT EXISTS audit_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    username   TEXT DEFAULT '',
+    ip_address TEXT DEFAULT '',
+    details    TEXT DEFAULT '',
+    success    INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS login_attempts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    username   TEXT NOT NULL,
+    ip_address TEXT DEFAULT '',
+    success    INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_customer      ON jobs(customer_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_status        ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_date          ON jobs(scheduled_date);
+CREATE INDEX IF NOT EXISTS idx_jobs_deleted       ON jobs(deleted);
+CREATE INDEX IF NOT EXISTS idx_invoices_customer  ON invoices(customer_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_status    ON invoices(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires   ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_audit_event        ON audit_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_audit_created      ON audit_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_usr ON login_attempts(username, created_at);
+CREATE INDEX IF NOT EXISTS idx_customers_deleted  ON customers(deleted);
+
+-- FTS5 full-text search on customers and jobs
+CREATE VIRTUAL TABLE IF NOT EXISTS customers_fts USING fts5(
+    name, phone, email, address, city, notes,
+    content='customers', content_rowid='id'
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS jobs_fts USING fts5(
+    service_type, pest_type, technician, address, notes,
+    content='jobs', content_rowid='id'
+);
 )SQL";
     exec("BEGIN");
     bool ok = exec(ddl);

@@ -1,138 +1,138 @@
 #include "job_store.hpp"
-#include <fstream>
-#include <sstream>
-#include <algorithm>
-#include <chrono>
-#include <iomanip>
+#include "logger.hpp"
+#include <stdexcept>
 
-static std::string now_iso_j() {
-    auto t = std::chrono::system_clock::now();
-    std::time_t tt = std::chrono::system_clock::to_time_t(t);
-    std::ostringstream os;
-    os << std::put_time(std::gmtime(&tt), "%Y-%m-%dT%H:%M:%SZ");
-    return os.str();
-}
+JobStore::JobStore(Database& db) : db_(db) {}
 
-std::string JobStore::esc(const std::string& s) {
-    std::string r;
-    for (char c : s) {
-        if (c == '|') r += "\\p";
-        else if (c == '\\') r += "\\\\";
-        else r += c;
-    }
-    return r;
-}
-
-std::string JobStore::unesc(const std::string& s) {
-    std::string r;
-    for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '\\' && i + 1 < s.size()) {
-            if (s[i+1] == 'p') { r += '|'; ++i; }
-            else if (s[i+1] == '\\') { r += '\\'; ++i; }
-            else r += s[i];
-        } else r += s[i];
-    }
-    return r;
-}
-
-std::string JobStore::serialize(const Job& j) const {
-    std::ostringstream os;
-    os << j.id << '|' << j.customer_id << '|'
-       << esc(j.service_type) << '|' << esc(j.pest_type) << '|'
-       << esc(j.status) << '|' << esc(j.scheduled_date) << '|'
-       << esc(j.scheduled_time) << '|' << esc(j.technician) << '|'
-       << esc(j.address) << '|' << esc(j.notes) << '|'
-       << j.price << '|' << j.created_at << '|' << esc(j.completed_at);
-    return os.str();
-}
-
-void JobStore::parse_line(const std::string& line) {
-    if (line.empty() || line[0] == '#') return;
-    std::vector<std::string> f;
-    std::string tok;
-    for (char ch : line) {
-        if (ch == '|') { f.push_back(tok); tok.clear(); }
-        else tok += ch;
-    }
-    f.push_back(tok);
-    if (f.size() < 13) return;
+static Job row_to_job(Database::Stmt& st) {
     Job j;
-    try { j.id = std::stoi(f[0]); } catch (...) { return; }
-    try { j.customer_id = std::stoi(f[1]); } catch (...) {}
-    j.service_type = unesc(f[2]);
-    j.pest_type = unesc(f[3]);
-    j.status = unesc(f[4]);
-    j.scheduled_date = unesc(f[5]);
-    j.scheduled_time = unesc(f[6]);
-    j.technician = unesc(f[7]);
-    j.address = unesc(f[8]);
-    j.notes = unesc(f[9]);
-    try { j.price = std::stod(f[10]); } catch (...) {}
-    j.created_at = f[11];
-    j.completed_at = unesc(f[12]);
-    if (j.id >= next_id_) next_id_ = j.id + 1;
-    jobs_.push_back(std::move(j));
+    j.id                 = st.col_int(0);
+    j.customer_id        = st.col_int(1);
+    j.service_type       = st.col_text(2);
+    j.pest_type          = st.col_text(3);
+    j.status             = st.col_text(4);
+    j.scheduled_date     = st.col_text(5);
+    j.scheduled_time     = st.col_text(6);
+    j.technician         = st.col_text(7);
+    j.address            = st.col_text(8);
+    j.notes              = st.col_text(9);
+    j.price              = st.col_double(10);
+    j.created_at         = st.col_text(11);
+    j.completed_at       = st.col_text(12);
+    j.deleted            = st.col_int(13) != 0;
+    j.recurring          = st.col_int(14) != 0;
+    j.recur_interval_days= st.col_int(15);
+    j.time_start         = st.col_text(16);
+    j.time_end           = st.col_text(17);
+    return j;
 }
 
-bool JobStore::load(const std::string& data_dir) {
-    path_ = data_dir + "/jobs.dat";
-    std::ifstream f(path_);
-    if (!f) return true;
-    std::string line;
-    while (std::getline(f, line)) parse_line(line);
-    return true;
-}
-
-bool JobStore::save() {
-    std::ofstream f(path_);
-    if (!f) return false;
-    std::lock_guard<std::mutex> lk(mu_);
-    for (const auto& j : jobs_) f << serialize(j) << '\n';
-    return true;
-}
+static const char* JOB_SELECT =
+    "SELECT id,customer_id,service_type,pest_type,status,scheduled_date,scheduled_time,"
+    "technician,address,notes,price,created_at,completed_at,deleted,recurring,"
+    "recur_interval_days,time_start,time_end FROM jobs";
 
 std::vector<Job> JobStore::all() const {
-    std::lock_guard<std::mutex> lk(mu_);
-    return jobs_;
+    std::vector<Job> result;
+    try {
+        Database::Stmt st(db_.handle(),
+            std::string(JOB_SELECT) + " WHERE deleted=0 ORDER BY scheduled_date DESC");
+        while (st.step()) result.push_back(row_to_job(st));
+    } catch (const std::exception& e) { LOGE("[jobs] all: " << e.what()); }
+    return result;
 }
 
-std::vector<Job> JobStore::for_customer(int cid) const {
-    std::lock_guard<std::mutex> lk(mu_);
-    std::vector<Job> out;
-    for (const auto& j : jobs_)
-        if (j.customer_id == cid) out.push_back(j);
-    return out;
+std::vector<Job> JobStore::for_customer(int customer_id) const {
+    std::vector<Job> result;
+    try {
+        Database::Stmt st(db_.handle(),
+            std::string(JOB_SELECT) + " WHERE customer_id=? AND deleted=0 ORDER BY scheduled_date DESC");
+        st.bind_int(1, customer_id);
+        while (st.step()) result.push_back(row_to_job(st));
+    } catch (...) {}
+    return result;
 }
 
 std::optional<Job> JobStore::find(int id) const {
-    std::lock_guard<std::mutex> lk(mu_);
-    for (const auto& j : jobs_)
-        if (j.id == id) return j;
-    return {};
+    try {
+        Database::Stmt st(db_.handle(), std::string(JOB_SELECT) + " WHERE id=?");
+        st.bind_int(1, id);
+        if (!st.step()) return {};
+        return row_to_job(st);
+    } catch (...) { return {}; }
 }
 
 Job JobStore::add(Job j) {
-    std::lock_guard<std::mutex> lk(mu_);
-    j.id = next_id_++;
-    j.created_at = now_iso_j();
-    if (j.status.empty()) j.status = "Scheduled";
-    jobs_.push_back(j);
+    try {
+        Database::Stmt st(db_.handle(),
+            "INSERT INTO jobs(customer_id,service_type,pest_type,status,scheduled_date,"
+            "scheduled_time,technician,address,notes,price,recurring,recur_interval_days,"
+            "time_start,time_end) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id,created_at");
+        st.bind_int(1,j.customer_id); st.bind_text(2,j.service_type);
+        st.bind_text(3,j.pest_type); st.bind_text(4,j.status.empty()?"Scheduled":j.status);
+        st.bind_text(5,j.scheduled_date); st.bind_text(6,j.scheduled_time);
+        st.bind_text(7,j.technician); st.bind_text(8,j.address);
+        st.bind_text(9,j.notes); st.bind_double(10,j.price);
+        st.bind_int(11,j.recurring?1:0); st.bind_int(12,j.recur_interval_days);
+        st.bind_text(13,j.time_start); st.bind_text(14,j.time_end);
+        if (st.step()) { j.id = st.col_int(0); j.created_at = st.col_text(1); }
+        // FTS
+        Database::Stmt fi(db_.handle(),
+            "INSERT INTO jobs_fts(rowid,service_type,pest_type,technician,address,notes) VALUES(?,?,?,?,?,?)");
+        fi.bind_int(1,j.id); fi.bind_text(2,j.service_type); fi.bind_text(3,j.pest_type);
+        fi.bind_text(4,j.technician); fi.bind_text(5,j.address); fi.bind_text(6,j.notes);
+        fi.step();
+    } catch (const std::exception& e) { LOGE("[jobs] add: " << e.what()); }
     return j;
 }
 
 bool JobStore::update(const Job& j) {
-    std::lock_guard<std::mutex> lk(mu_);
-    for (auto& x : jobs_) {
-        if (x.id == j.id) { x = j; return true; }
-    }
-    return false;
+    try {
+        Database::Stmt st(db_.handle(),
+            "UPDATE jobs SET service_type=?,pest_type=?,status=?,scheduled_date=?,"
+            "scheduled_time=?,technician=?,address=?,notes=?,price=?,recurring=?,"
+            "recur_interval_days=?,time_start=?,time_end=?,completed_at=? WHERE id=?");
+        st.bind_text(1,j.service_type); st.bind_text(2,j.pest_type);
+        st.bind_text(3,j.status); st.bind_text(4,j.scheduled_date);
+        st.bind_text(5,j.scheduled_time); st.bind_text(6,j.technician);
+        st.bind_text(7,j.address); st.bind_text(8,j.notes);
+        st.bind_double(9,j.price); st.bind_int(10,j.recurring?1:0);
+        st.bind_int(11,j.recur_interval_days); st.bind_text(12,j.time_start);
+        st.bind_text(13,j.time_end); st.bind_text(14,j.completed_at);
+        st.bind_int(15,j.id); st.step();
+        // FTS
+        Database::Stmt fd(db_.handle(), "DELETE FROM jobs_fts WHERE rowid=?");
+        fd.bind_int(1,j.id); fd.step();
+        Database::Stmt fi(db_.handle(),
+            "INSERT INTO jobs_fts(rowid,service_type,pest_type,technician,address,notes) VALUES(?,?,?,?,?,?)");
+        fi.bind_int(1,j.id); fi.bind_text(2,j.service_type); fi.bind_text(3,j.pest_type);
+        fi.bind_text(4,j.technician); fi.bind_text(5,j.address); fi.bind_text(6,j.notes);
+        fi.step();
+        return true;
+    } catch (const std::exception& e) { LOGE("[jobs] update: " << e.what()); return false; }
 }
 
 bool JobStore::remove(int id) {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = std::remove_if(jobs_.begin(), jobs_.end(),
-        [id](const Job& j){ return j.id == id; });
-    if (it == jobs_.end()) return false;
-    jobs_.erase(it, jobs_.end());
-    return true;
+    try {
+        Database::Stmt st(db_.handle(), "UPDATE jobs SET deleted=1 WHERE id=?");
+        st.bind_int(1,id); st.step();
+        Database::Stmt fd(db_.handle(), "DELETE FROM jobs_fts WHERE rowid=?");
+        fd.bind_int(1,id); fd.step();
+        return true;
+    } catch (...) { return false; }
+}
+
+bool JobStore::hard_delete(int id) {
+    try {
+        Database::Stmt st(db_.handle(), "DELETE FROM jobs WHERE id=?");
+        st.bind_int(1,id); st.step(); return true;
+    } catch (...) { return false; }
+}
+
+void JobStore::rebuild_fts() {
+    try {
+        db_.exec("DELETE FROM jobs_fts");
+        db_.exec("INSERT INTO jobs_fts(rowid,service_type,pest_type,technician,address,notes) "
+                 "SELECT id,service_type,pest_type,technician,address,notes FROM jobs WHERE deleted=0");
+    } catch (const std::exception& e) { LOGE("[jobs] rebuild_fts: " << e.what()); }
 }

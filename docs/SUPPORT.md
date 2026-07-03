@@ -1,6 +1,6 @@
 # Support - Metis Exterminator Plus
 
-**Version 2.3.0**
+**Version 3.1.0**
 
 ---
 

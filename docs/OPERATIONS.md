@@ -1,103 +1,44 @@
 # Operations - Metis Exterminator Plus
 
-**Version 2.3.0**
+**Version 3.1.0**
 
 ---
 
 ## Starting the Server
 
-```bash
-# Windows
+```
 Metis_Exterminator_Plus.exe
-
-# Linux/macOS
-./Metis_Exterminator_Plus
 ```
 
-The server prints startup information to stdout including version, database path, and the URL to open in a browser.
+The server reads `config/config.pson` from the same directory as the executable,
+opens the SQLite database, resets admin credentials from PSON, and begins listening.
+
+Console output shows the exact URL to open in your browser.
 
 ---
 
-## Stopping the Server
+## Windows Deployment (NSSM)
 
-Press `Ctrl+C` in the terminal. The server handles SIGINT and SIGTERM, flushes all data stores, closes the database cleanly, and exits.
+[Non-Sucking Service Manager](https://nssm.cc/) installs the server as a Windows service.
 
----
-
-## Data Directory
-
-All persistent data lives in `data/` (exe-relative, configurable in config.pson):
-
-```
-data/
-  metis_exterminator.db   SQLite database (users, sessions, schema)
-  customers.dat            Flat-file customer store (flat-file backup)
-  jobs.dat                 Flat-file job store
-  invoices.dat             Flat-file invoice store
-logs/
-  metis_exterminator.log   Application log
-```
-
----
-
-## Backup
-
-### SQLite database (recommended)
-Copy `data/metis_exterminator.db` while the server is stopped, or use SQLite's online backup API. The WAL file (`metis_exterminator.db-wal`) must also be copied if present.
-
-### Full data backup
-Copy the entire `data/` directory.
-
-### Browser-side backup
-Use the Export button in the browser navbar to download a JSON snapshot.
-
----
-
-## Log Rotation
-
-Log rotation is configured in config.pson under the `logging` section:
-- `max_size_mb`: rotate when log file reaches this size
-- `max_files`: number of rotated files to retain
-
-Log rotation implementation is on the TODO list. Currently logs accumulate without rotation.
-
----
-
-## Session Cleanup
-
-A background thread purges expired sessions from the SQLite `sessions` table every 10 minutes. No manual intervention required.
-
----
-
-## Database Maintenance
-
-```bash
-# Compact the database (reclaim space from deleted records)
-sqlite3 data/metis_exterminator.db "VACUUM;"
-
-# Check integrity
-sqlite3 data/metis_exterminator.db "PRAGMA integrity_check;"
-
-# Export to SQL
-sqlite3 data/metis_exterminator.db .dump > backup.sql
-```
-
----
-
-## Running as a Windows Service
-
-Use NSSM (Non-Sucking Service Manager) or the Windows Service Control Manager:
-
-```bash
-# Install with NSSM
-nssm install MetisExterminator "C:\path\to\Metis_Exterminator_Plus.exe"
-nssm set MetisExterminator AppDirectory "C:\path\to\"
+```cmd
+nssm install MetisExterminator "C:\Metis\Metis_Exterminator_Plus.exe"
+nssm set MetisExterminator AppDirectory "C:\Metis"
+nssm set MetisExterminator AppStdout "C:\Metis\logs\service-out.log"
+nssm set MetisExterminator AppStderr "C:\Metis\logs\service-err.log"
+nssm set MetisExterminator Start SERVICE_AUTO_START
 nssm start MetisExterminator
 ```
 
+To stop or remove:
+```cmd
+nssm stop MetisExterminator
+nssm remove MetisExterminator confirm
+```
+
 ---
 
-## Running as a Linux systemd Service
+## Linux Deployment (systemd)
 
 Create `/etc/systemd/system/metis-exterminator.service`:
 
@@ -108,16 +49,21 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/metis-exterminator-plus
-ExecStart=/opt/metis-exterminator-plus/Metis_Exterminator_Plus
+User=metis
+WorkingDirectory=/opt/metis-exterminator
+ExecStart=/opt/metis-exterminator/Metis_Exterminator_Plus
 Restart=on-failure
 RestartSec=5
+StandardOutput=append:/opt/metis-exterminator/logs/service.log
+StandardError=append:/opt/metis-exterminator/logs/service.log
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 ```bash
+sudo useradd -r -s /bin/false metis
+sudo chown -R metis:metis /opt/metis-exterminator
 sudo systemctl daemon-reload
 sudo systemctl enable metis-exterminator
 sudo systemctl start metis-exterminator
@@ -126,44 +72,66 @@ sudo systemctl status metis-exterminator
 
 ---
 
-## Kubernetes Deployment
+## Backup
 
-Kubernetes probes are pre-wired:
+The entire database is a single file: `data/metis_exterminator.db`.
+Copy it to back up all data. SQLite WAL mode ensures consistency during copy.
 
-```yaml
-livenessProbe:
-  httpGet:
-    path: /healthz
-    port: 9100
-  initialDelaySeconds: 5
-  periodSeconds: 30
+```bash
+# Linux
+cp data/metis_exterminator.db backups/metis_$(date +%Y%m%d).db
 
-readinessProbe:
-  httpGet:
-    path: /readyz
-    port: 9100
-  initialDelaySeconds: 3
-  periodSeconds: 10
-```
-
-Enable Kubernetes features in config.pson when ready:
-```
-infra {
-    kubernetes_enabled = true
-    kubernetes_namespace = "metis"
-}
+# Windows PowerShell
+Copy-Item data\metis_exterminator.db backups\metis_$(Get-Date -Format yyyyMMdd).db
 ```
 
 ---
 
-## Monitoring
+## Log Rotation
 
-Prometheus metrics are available at `GET /metrics` in text format. Scrape with:
-
-```yaml
-# prometheus.yml
-scrape_configs:
-  - job_name: metis_exterminator
-    static_configs:
-      - targets: ['2.3.0.1:9100']
+Manual rotation via API (admin only):
 ```
+POST /api/admin/rotate-log
+Authorization: Bearer <token>
+```
+
+Or call it from the browser: Admin → System Log → Rotate Log button.
+
+Automatic rotation: configure `logging.max_size_mb` and `logging.max_files` in `config.pson`.
+Implementation of size-triggered rotation is planned for v3.1.0.
+
+---
+
+## Certificate Management
+
+TLS certificate lives in `tls/server.crt` and `tls/server.key`.
+Paths are configurable in `config.pson` under `server.tls_cert` and `server.tls_key`.
+
+To regenerate a self-signed certificate:
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout tls/server.key -out tls/server.crt \
+  -days 365 -nodes -subj "/CN=127.0.0.1" \
+  -addext "subjectAltName=IP:127.0.0.1"
+```
+
+For production, replace with a certificate from a trusted CA.
+
+---
+
+## Health Checks
+
+- `GET /healthz` — liveness probe (always 200 if server is up)
+- `GET /readyz` — readiness probe (200 when data stores are loaded)
+- `GET /metrics` — Prometheus-compatible metrics
+
+---
+
+## Changing Admin Password
+
+Edit `config/config.pson`:
+```
+auth {
+    admin_password = "NewSecurePassword#2026"
+}
+```
+Restart the server. The admin account is reset from PSON on every startup.

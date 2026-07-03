@@ -1,6 +1,6 @@
 # Background - Metis Exterminator Plus
 
-**Version 2.3.0**
+**Version 3.1.0**
 
 ---
 
@@ -52,7 +52,7 @@ A self-hosted, locally-run system with a modern browser client, enterprise-grade
 
 Metis Exterminator Plus is positioned as a self-hosted alternative to Generation 4 SaaS platforms, delivering the core workflow of a pest control business without subscription fees, internet dependencies, or external data custody.
 
-**Core workflow coverage in v2.3.0:**
+**Core workflow coverage in v3.1.0:**
 - New customer intake and full contact management
 - Job creation, scheduling, and technician assignment
 - Service delivery tracking with status progression

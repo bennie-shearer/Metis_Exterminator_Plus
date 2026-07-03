@@ -13,7 +13,7 @@ server {
 
 app {
     name = "Metis Exterminator Plus"
-    version = "2.3.6"
+    version = "3.1.4"
     company = "Your Company Name"
     currency = "USD"
     invoice_prefix = "INV"
@@ -58,8 +58,8 @@ logging {
     max_size_mb = 10
     max_files = 5
     structured = true
+    audit_to_sqlite = true
 }
-
 session {
     purge_interval_minutes = 10
 }
@@ -68,4 +68,29 @@ client {
     theme = "dark"
     session_storage_key = "mep_session_token"
     theme_storage_key = "mep_theme"
+}
+
+security {
+    allowed_origins = "https://127.0.0.1:9100"
+    api_key_enabled = false
+    api_key_header = "X-API-Key"
+    rate_limit_login_per_minute = 10
+}
+
+email {
+    enabled = false
+    smtp_host = "smtp.example.com"
+    smtp_port = 587
+    smtp_user = ""
+    smtp_password = ""
+    from_address = "noreply@example.com"
+}
+
+features {
+    recurring_jobs = true
+    chemical_tracking = true
+    technician_time_tracking = true
+    pdf_export = false
+    csv_export = true
+    route_optimization = false
 }

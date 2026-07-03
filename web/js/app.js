@@ -209,6 +209,9 @@ async function loadJobs() {
         <td>${fmt_currency(j.price)}</td>
         <td><div class="actions">
           <button class="btn-secondary btn-sm" onclick="editJob(${j.id})">Edit</button>
+          <button class="btn-secondary btn-sm" onclick="trackTime(${j.id},'${j.service_type.replace(/'/g,'&#39;')}')">&#9201; Time</button>
+          <button class="btn-secondary btn-sm" onclick="showChemicals(${j.id},'${j.service_type.replace(/'/g,'&#39;')}')">&#9879; Chem</button>
+          ${j.recurring?`<button class="btn-secondary btn-sm" onclick="spawnRecurring(${j.id})">&#8635; Next</button>`:''}
           <button class="btn-danger btn-sm" onclick="deleteJob(${j.id})">Delete</button>
         </div></td>
       </tr>`).join('')}</tbody>
@@ -291,6 +294,8 @@ async function loadInvoices() {
         <td>${fmt_currency(inv.total)}</td><td>${badge(inv.status)}</td>
         <td><div class="actions">
           <button class="btn-secondary btn-sm" onclick="viewInvoice(${inv.id})">View</button>
+          <button class="btn-secondary btn-sm" onclick="printInvoice(${inv.id})" title="Print / PDF">&#128438;</button>
+          <button class="btn-secondary btn-sm" onclick="sendInvoiceEmail(${inv.id},'${inv.invoice_number}')" title="Send by email">&#9993;</button>
           ${inv.status==='Pending'?`<button class="btn-primary btn-sm" onclick="markPaid(${inv.id})">Mark paid</button>`:''}
           <button class="btn-danger btn-sm" onclick="deleteInvoice(${inv.id})">Delete</button>
         </div></td>
@@ -500,7 +505,7 @@ sel('btn-new-user') && (sel('btn-new-user').onclick = () => {
 // ===== USER MENU & AUTH =====
 let _current_user  = null;
 let _session_token = sessionStorage.getItem('mep_session_token') || null;
-let _ver_str  = '2.3.0';
+let _ver_str  = '3.0.0';
 let _app_name = 'Metis Exterminator Plus';
 let _tax_rate = 0.0875;
 
@@ -604,6 +609,7 @@ async function attempt_login() {
     if (result && result.token) {
       _session_token = result.token;
       sessionStorage.setItem('mep_session_token', result.token);
+      API.setToken(result.token);  // wire token into all API calls
       const u = await API.me(result.token);
       if (u) update_user_ui(u);
       await show_app();
@@ -650,9 +656,15 @@ async function exportData() {
 async function init() {
   const online = await API.isOnline();
   const ver_info = await API.version();
-  _ver_str  = ver_info.version || '2.3.0';
+  _ver_str  = ver_info.version || '3.0.0';
   _app_name = ver_info.app    || 'Metis Exterminator Plus';
   _tax_rate = ver_info.tax_rate || 0.0875;
+  cfg_company = ver_info.company || '';
+
+  // Apply theme from PSON if no saved preference
+  if (ver_info.theme && !sessionStorage.getItem('mep_theme') && !localStorage.getItem('mep_theme')) {
+    document.documentElement.setAttribute('data-theme', ver_info.theme);
+  }
 
   sel('nav-version').textContent = `v${_ver_str} (server)`;
 
@@ -683,6 +695,7 @@ async function init() {
       try { await API.logout(_session_token); } catch {}
       _session_token = null;
       sessionStorage.removeItem('mep_session_token');
+      API.clearToken();
     }
     update_user_ui(null);
     sel('user-dropdown').classList.add('hidden');
@@ -710,6 +723,7 @@ async function init() {
 
   if (online && _session_token) {
     try {
+      API.setToken(_session_token);  // restore token for all API calls
       const u = await API.me(_session_token);
       if (u && u.id) {
         update_user_ui(u);
@@ -731,3 +745,462 @@ async function init() {
 
 _init_promise = init();
 _init_promise.catch(e => console.error('init error:', e));
+
+// ===== CALENDAR VIEW =====
+let _cal_year = new Date().getFullYear();
+let _cal_month = new Date().getMonth();
+const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+async function loadCalendar() {
+  sel('cal-month-label').textContent = MONTHS[_cal_month] + ' ' + _cal_year;
+  const grid = sel('calendar-grid');
+  grid.innerHTML = '<div class="log-empty">Loading...</div>';
+  try {
+    await refreshCustomerCache();
+    const jobs = await API.jobs({});
+    const firstDay = new Date(_cal_year, _cal_month, 1).getDay();
+    const daysInMonth = new Date(_cal_year, _cal_month+1, 0).getDate();
+    const today = new Date().toISOString().slice(0,10);
+    let html = DAYS.map(d=>`<div class="cal-header-cell">${d}</div>`).join('');
+    for (let i=0;i<firstDay;i++) html += '<div class="cal-cell other-month"></div>';
+    for (let d=1;d<=daysInMonth;d++) {
+      const date = `${_cal_year}-${String(_cal_month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const dayJobs = jobs.filter(j=>j.scheduled_date===date && j.status!=='Cancelled');
+      html += `<div class="cal-cell${date===today?' today':''}">
+        <div class="cal-day-num">${d}</div>
+        ${dayJobs.map(j=>`<div class="cal-event" title="${customerName(j.customer_id)} - ${j.service_type}">${customerName(j.customer_id).split(' ')[0]}: ${j.service_type}</div>`).join('')}
+      </div>`;
+    }
+    grid.innerHTML = html;
+  } catch(e) { grid.innerHTML = serverError(e); }
+}
+
+window.spawnRecurring = async function(jobId) {
+  try {
+    const r = await API.spawnRecurring(jobId);
+    toast(`Next recurring job scheduled for ${r.scheduled_date}`);
+    await loadJobs();
+  } catch(e) { toast('Failed: '+e.message, true); }
+};
+
+// Wire route view controls on nav click
+async function loadRouteViewInit() {
+  const rd = sel('route-date');
+  if (rd && !rd.value) rd.value = today_str();
+  // Populate technician dropdown
+  const techSel = sel('route-tech');
+  if (techSel && techSel.children.length <= 1) {
+    TECHNICIANS.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t; opt.textContent = t;
+      techSel.appendChild(opt);
+    });
+  }
+  await loadRouteView();
+}
+
+// Update cfg_company from version info
+const _orig_init_for_co = typeof init === 'function' ? null : null;
+
+sel('cal-prev') && (sel('cal-prev').onclick = () => {
+  _cal_month--; if (_cal_month<0){_cal_month=11;_cal_year--;} loadCalendar();
+});
+sel('cal-next') && (sel('cal-next').onclick = () => {
+  _cal_month++; if (_cal_month>11){_cal_month=0;_cal_year++;} loadCalendar();
+});
+
+// ===== FTS SEARCH VIEW =====
+async function loadSearch() {
+  const input = sel('fts-search-input');
+  if (input) input.oninput = debounce(async(e) => {
+    const q = e.target.value.trim();
+    const el = sel('fts-results');
+    if (!q) { el.innerHTML = ''; return; }
+    el.innerHTML = '<div class="log-empty">Searching...</div>';
+    try {
+      await refreshCustomerCache();
+      const r = await API.search(q);
+      let html = '';
+      if (r.customers && r.customers.length) {
+        html += `<h3 style="font-size:14px;font-weight:500;margin-bottom:8px;color:var(--text-secondary)">Customers (${r.customers.length})</h3>
+        <table class="data-table" style="margin-bottom:1.5rem">
+          <thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>City</th></tr></thead>
+          <tbody>${r.customers.map(c=>`<tr>
+            <td><button class="btn-link" onclick="editCustomer(${c.id})">${c.name}</button></td>
+            <td>${c.phone||'—'}</td><td>${c.email||'—'}</td>
+            <td>${c.city?c.city+(c.state?', '+c.state:''):'—'}</td>
+          </tr>`).join('')}</tbody>
+        </table>`;
+      }
+      if (r.jobs && r.jobs.length) {
+        html += `<h3 style="font-size:14px;font-weight:500;margin-bottom:8px;color:var(--text-secondary)">Jobs (${r.jobs.length})</h3>
+        <table class="data-table">
+          <thead><tr><th>Customer</th><th>Service</th><th>Pest</th><th>Date</th><th>Status</th></tr></thead>
+          <tbody>${r.jobs.map(j=>`<tr>
+            <td>${customerName(j.customer_id)}</td>
+            <td>${j.service_type}</td><td>${j.pest_type||'—'}</td>
+            <td>${fmt_date(j.scheduled_date)}</td><td>${badge(j.status)}</td>
+          </tr>`).join('')}</tbody>
+        </table>`;
+      }
+      if (!html) html = '<div class="empty-state"><strong>No results</strong><p>Try a different search term.</p></div>';
+      el.innerHTML = html;
+    } catch(e) { sel('fts-results').innerHTML = serverError(e); }
+  }, 300);
+}
+
+function debounce(fn, ms) {
+  let t;
+  return function(...args) { clearTimeout(t); t = setTimeout(()=>fn.apply(this,args), ms); };
+}
+
+// ===== CSV EXPORT BUTTONS =====
+sel('btn-export-invoices-csv') && (sel('btn-export-invoices-csv').onclick = async() => {
+  try { API.exportInvoicesCsv(); toast('Downloading invoices CSV...'); }
+  catch(e) { toast('Export failed', true); }
+});
+
+sel('btn-export-customers-csv') && (sel('btn-export-customers-csv').onclick = async() => {
+  try { API.exportCustomersCsv(); toast('Downloading customers CSV...'); }
+  catch(e) { toast('Export failed', true); }
+});
+
+// ===== OVERDUE CHECK =====
+sel('btn-check-overdue') && (sel('btn-check-overdue').onclick = async() => {
+  try {
+    const r = await API.checkOverdue();
+    toast(r.marked_overdue > 0 ? `${r.marked_overdue} invoice(s) marked overdue` : 'No overdue invoices found');
+    await loadInvoices();
+  } catch(e) { toast('Check failed: ' + e.message, true); }
+});
+
+// ===== USER MANAGEMENT ADMIN UI =====
+const _orig_load_admin = typeof loadAdmin === 'function' ? loadAdmin : null;
+window.loadAdminFull = async function() {
+  const online = await API.isOnline();
+  const list = sel('admin-user-list');
+  if (!list) return;
+  const header = `<div class="user-list-row user-list-header">
+    <div></div><div>Username</div><div>Role</div><div>Status</div><div>Actions</div>
+  </div>`;
+  if (!online) { list.innerHTML = header + `<div class="user-list-row" style="grid-column:1/-1;padding:1rem;color:var(--text-muted)">Server not connected.</div>`; return; }
+  try {
+    const users = await API.users();
+    list.innerHTML = header + users.map(u => `<div class="user-list-row">
+      <div><div class="user-avatar">${u.username.slice(0,2).toUpperCase()}</div></div>
+      <div><strong>${u.username}</strong>${u.has_api_key?'<span style="margin-left:6px;font-size:10px;color:var(--text-muted)">API key</span>':''}</div>
+      <div><span class="user-role-pill ${u.role==='admin'?'role-admin':'role-technician'}">${u.role}</span></div>
+      <div>${u.active?'<span class="badge badge-completed">Active</span>':'<span class="badge badge-cancelled">Inactive</span>'}</div>
+      <div><div class="actions">
+        ${u.active && u.id !== (_current_user ? _current_user.id : 0) ?
+          `<button class="btn-danger btn-sm" onclick="deactivateUser(${u.id},'${u.username}')">Deactivate</button>` : ''}
+        <button class="btn-secondary btn-sm" onclick="adminSetPassword(${u.id},'${u.username}')">Set password</button>
+      </div></div>
+    </div>`).join('');
+  } catch(e) { list.innerHTML = header + serverError(e); }
+};
+
+window.deactivateUser = async (id, username) => {
+  if (!confirm(`Deactivate user "${username}"? They will be signed out immediately.`)) return;
+  try { await API.deactivateUser(id); toast('User deactivated'); await window.loadAdminFull(); }
+  catch(e) { toast('Failed: ' + e.message, true); }
+};
+
+window.adminSetPassword = (id, username) => {
+  Modal.show(`Set password for ${username}`, `
+    <div class="form-row"><label>New password (min 8 characters)</label><input id="f-apw" type="password" autocomplete="new-password"></div>
+    <div class="pw-strength" id="pw-strength" style="width:0;background:#e5e7eb;height:4px;border-radius:2px;transition:width 0.2s,background 0.2s;margin-top:4px"></div>`,
+  async () => {
+    const pw = sel('f-apw').value;
+    if (pw.length < 8) { toast('Password must be at least 8 characters', true); return; }
+    try { await API.setPassword(id, pw); Modal.hide(); toast('Password updated'); }
+    catch(e) { toast('Failed: ' + e.message, true); }
+  });
+  setTimeout(() => {
+    const inp = sel('f-apw');
+    if (inp) inp.oninput = () => {
+      const v=inp.value; let s=0;
+      if(v.length>=8)s++;if(/[A-Z]/.test(v))s++;if(/[0-9]/.test(v))s++;if(/[^A-Za-z0-9]/.test(v))s++;
+      const colors=['#e5e7eb','#ef4444','#f59e0b','#22c55e','#16a34a'];
+      const bar=sel('pw-strength');
+      if(bar){bar.style.width=(s*25)+'%';bar.style.background=colors[s];}
+    };
+  }, 50);
+};
+
+// Wire btn-new-user properly
+sel('btn-new-user') && (sel('btn-new-user').onclick = () => {
+  Modal.show('New user', `
+    <div class="form-row"><label>Username *</label><input id="f-uname" type="text" autocomplete="off"></div>
+    <div class="form-row"><label>Password * (min 8 characters)</label><input id="f-upw" type="password" autocomplete="new-password"></div>
+    <div class="pw-strength" id="pw-strength" style="width:0;background:#e5e7eb;height:4px;border-radius:2px;transition:width 0.2s,background 0.2s;margin-top:4px"></div>
+    <div class="form-row"><label>Role</label><select id="f-urole"><option value="technician">Technician</option><option value="admin">Admin</option></select></div>`,
+  async () => {
+    const uname = sel('f-uname').value.trim();
+    const pw    = sel('f-upw').value;
+    const role  = sel('f-urole').value;
+    if (!uname || !pw) { toast('Username and password required', true); return; }
+    if (pw.length < 8) { toast('Password must be at least 8 characters', true); return; }
+    try {
+      await API.createUser({username:uname, password:pw, role});
+      Modal.hide(); toast('User created: ' + uname);
+      await window.loadAdminFull();
+    } catch(e) { toast('Failed: ' + e.message, true); }
+  });
+  setTimeout(() => {
+    const inp = sel('f-upw');
+    if (inp) inp.oninput = () => {
+      const v=inp.value; let s=0;
+      if(v.length>=8)s++;if(/[A-Z]/.test(v))s++;if(/[0-9]/.test(v))s++;if(/[^A-Za-z0-9]/.test(v))s++;
+      const colors=['#e5e7eb','#ef4444','#f59e0b','#22c55e','#16a34a'];
+      const bar=sel('pw-strength');
+      if(bar){bar.style.width=(s*25)+'%';bar.style.background=colors[s];}
+    };
+  }, 50);
+});
+
+// Wire change password to real endpoint
+sel('dd-change-pw') && (sel('dd-change-pw').onclick = () => {
+  sel('user-dropdown').classList.add('hidden');
+  Modal.show('Change password', `
+    <div class="form-row"><label>Current password</label><input id="f-pw-old" type="password" autocomplete="current-password"></div>
+    <div class="form-row"><label>New password (min 8 characters)</label><input id="f-pw-new" type="password" autocomplete="new-password"></div>
+    <div class="pw-strength" id="pw-strength" style="width:0;background:#e5e7eb;height:4px;border-radius:2px;transition:width 0.2s,background 0.2s;margin-top:4px"></div>
+    <div class="form-row"><label>Confirm new password</label><input id="f-pw-confirm" type="password" autocomplete="new-password"></div>`,
+  async () => {
+    const oldpw = sel('f-pw-old').value;
+    const newpw = sel('f-pw-new').value;
+    const conf  = sel('f-pw-confirm').value;
+    if (!oldpw||!newpw) { toast('All fields required', true); return; }
+    if (newpw !== conf)  { toast('Passwords do not match', true); return; }
+    if (newpw.length < 8){ toast('Password must be at least 8 characters', true); return; }
+    try {
+      await API.changePassword({old_password:oldpw, new_password:newpw});
+      Modal.hide(); toast('Password changed successfully');
+    } catch(e) { toast('Change failed: ' + e.message, true); }
+  });
+  setTimeout(() => {
+    const inp = sel('f-pw-new');
+    if (inp) inp.oninput = () => {
+      const v=inp.value; let s=0;
+      if(v.length>=8)s++;if(/[A-Z]/.test(v))s++;if(/[0-9]/.test(v))s++;if(/[^A-Za-z0-9]/.test(v))s++;
+      const colors=['#e5e7eb','#ef4444','#f59e0b','#22c55e','#16a34a'];
+      const bar=sel('pw-strength');
+      if(bar){bar.style.width=(s*25)+'%';bar.style.background=colors[s];}
+    };
+  }, 50);
+});
+
+// Override loadView to include new views
+const _orig_loadView = loadView;
+window.loadView = async function(view) {
+  if      (view==='calendar') await loadCalendar();
+  else if (view==='search')   await loadSearch();
+  else if (view==='admin')    await window.loadAdminFull();
+  else if (view==='route')    await loadRouteViewInit();
+  else                        await _orig_loadView(view);
+};
+
+// ===== PAGINATION HELPER =====
+const PAGE_SIZE = 25;
+
+function paginate(items, page) {
+  const total = items.length;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const p = Math.max(1, Math.min(page, pages));
+  const start = (p-1)*PAGE_SIZE;
+  return { items: items.slice(start, start+PAGE_SIZE), page:p, pages, total };
+}
+
+function paginationHtml(page, pages, onPage) {
+  if (pages <= 1) return '';
+  let html = '<div class="pagination">';
+  html += `<button class="btn-secondary btn-sm" ${page<=1?'disabled':''} onclick="${onPage}(${page-1})">&#8592;</button>`;
+  html += `<span class="page-info">Page ${page} of ${pages}</span>`;
+  html += `<button class="btn-secondary btn-sm" ${page>=pages?'disabled':''} onclick="${onPage}(${page+1})">&#8594;</button>`;
+  html += '</div>';
+  return html;
+}
+
+// ===== CHEMICAL TRACKING UI =====
+window.showChemicals = async function(jobId, jobLabel) {
+  let chems = [];
+  try { chems = await API.chemicalsForJob(jobId); } catch {}
+  const itemsHtml = () => chems.length ? `<table class="data-table" style="margin-bottom:1rem">
+    <thead><tr><th>Chemical</th><th>EPA Reg</th><th>Qty</th><th>Unit</th><th>Applied</th><th></th></tr></thead>
+    <tbody>${chems.map(c=>`<tr>
+      <td>${c.chemical_name}</td><td>${c.epa_reg||'—'}</td>
+      <td>${c.quantity_oz}</td><td>${c.unit}</td><td>${fmt_date(c.applied_at)}</td>
+      <td><button class="btn-danger btn-sm" onclick="deleteChemical(${jobId},${c.id})">Remove</button></td>
+    </tr>`).join('')}</tbody>
+  </table>` : '<p style="color:var(--text-muted);font-size:13px">No chemicals recorded yet.</p>';
+
+  const formHtml = () => `
+    <div class="chemical-row" style="margin-top:1rem">
+      <input id="chem-name" type="text" placeholder="Chemical name *">
+      <input id="chem-epa" type="text" placeholder="EPA Reg #">
+      <input id="chem-qty" type="number" step="0.1" min="0" placeholder="Qty">
+      <select id="chem-unit"><option>oz</option><option>ml</option><option>lb</option><option>g</option><option>gal</option></select>
+      <button class="btn-primary btn-sm" onclick="addChemical(${jobId})">Add</button>
+    </div>`;
+
+  Modal.show(`Chemicals — ${jobLabel}`,
+    `<div id="chem-list">${itemsHtml()}</div>${formHtml()}`, null);
+};
+
+window.addChemical = async function(jobId) {
+  const name = sel('chem-name').value.trim();
+  const epa  = sel('chem-epa').value.trim();
+  const qty  = parseFloat(sel('chem-qty').value)||0;
+  const unit = sel('chem-unit').value;
+  if (!name) { toast('Chemical name required', true); return; }
+  try {
+    await API.addChemical(jobId, {chemical_name:name, epa_reg:epa, quantity_oz:qty, unit});
+    sel('chem-name').value=''; sel('chem-epa').value=''; sel('chem-qty').value='';
+    toast('Chemical added');
+    // Refresh list
+    const chems = await API.chemicalsForJob(jobId);
+    sel('chem-list').innerHTML = chems.length ? `<table class="data-table" style="margin-bottom:1rem">
+      <thead><tr><th>Chemical</th><th>EPA Reg</th><th>Qty</th><th>Unit</th><th>Applied</th><th></th></tr></thead>
+      <tbody>${chems.map(c=>`<tr>
+        <td>${c.chemical_name}</td><td>${c.epa_reg||'—'}</td>
+        <td>${c.quantity_oz}</td><td>${c.unit}</td><td>${fmt_date(c.applied_at)}</td>
+        <td><button class="btn-danger btn-sm" onclick="deleteChemical(${jobId},${c.id})">Remove</button></td>
+      </tr>`).join('')}</tbody>
+    </table>` : '<p style="color:var(--text-muted);font-size:13px">No chemicals recorded yet.</p>';
+  } catch(e) { toast('Failed: '+e.message, true); }
+};
+
+window.deleteChemical = async function(jobId, chemId) {
+  try { await API.deleteChemical(jobId, chemId); toast('Removed'); await showChemicals(jobId,''); }
+  catch(e) { toast('Failed', true); }
+};
+
+// ===== TIME TRACKING UI =====
+window.trackTime = async function(jobId, jobLabel) {
+  const j = await API.job(jobId);
+  Modal.show(`Time tracking — ${jobLabel}`, `
+    <div class="form-row-2">
+      <div class="form-row"><label>Time started</label><input id="tt-start" type="time" value="${j.time_start||''}"></div>
+      <div class="form-row"><label>Time completed</label><input id="tt-end" type="time" value="${j.time_end||''}"></div>
+    </div>
+    ${j.time_start&&j.time_end ? `<p style="font-size:13px;color:var(--text-secondary);margin-top:8px">Duration: ${calcDuration(j.time_start,j.time_end)}</p>` : ''}`,
+  async () => {
+    try {
+      await API.updateJobTime(jobId, {time_start:sel('tt-start').value, time_end:sel('tt-end').value});
+      Modal.hide(); toast('Time updated'); await loadJobs();
+    } catch(e) { toast('Failed: '+e.message, true); }
+  });
+};
+
+function calcDuration(start, end) {
+  if (!start||!end) return '—';
+  const [sh,sm]=[...start.split(':').map(Number)];
+  const [eh,em]=[...end.split(':').map(Number)];
+  const mins = (eh*60+em)-(sh*60+sm);
+  if (mins<0) return '—';
+  return `${Math.floor(mins/60)}h ${mins%60}m`;
+}
+
+// ===== ROUTE OPTIMIZATION UI =====
+async function loadRouteView() {
+  const el = sel('route-content');
+  if (!el) return;
+  const date = sel('route-date') ? sel('route-date').value : today_str();
+  const tech = sel('route-tech') ? sel('route-tech').value : '';
+  el.innerHTML = '<div class="log-empty">Optimizing route...</div>';
+  try {
+    await refreshCustomerCache();
+    const route = await API.optimizeRoute(date, tech);
+    if (!route.length) { el.innerHTML = '<div class="empty-state"><strong>No jobs to route</strong><p>Schedule jobs with addresses for the selected date.</p></div>'; return; }
+    el.innerHTML = `<table class="data-table">
+      <thead><tr><th>#</th><th>Address</th><th>Customer</th><th>Service</th><th>Time</th><th>Technician</th></tr></thead>
+      <tbody>${route.map((j,i)=>`<tr>
+        <td><strong>${i+1}</strong></td>
+        <td>${j.address||'—'}</td>
+        <td>${customerName(j.customer_id)}</td>
+        <td>${j.service_type}</td>
+        <td>${j.scheduled_time||'—'}</td>
+        <td>${j.technician||'—'}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  } catch(e) { el.innerHTML = serverError(e); }
+}
+
+// ===== EMAIL NOTIFICATION BUTTON =====
+window.sendInvoiceEmail = async function(invId, invNum) {
+  if (!confirm(`Send invoice ${invNum} by email?`)) return;
+  try {
+    const r = await API.sendInvoiceEmail(invId);
+    toast(r.note || r.status);
+  } catch(e) { toast('Failed: '+e.message, true); }
+};
+
+// ===== PRINT / PDF UTILITIES =====
+window.printCalendar = function() {
+  window.print();
+};
+
+window.printInvoice = async function(id) {
+  await refreshCustomerCache();
+  const inv = await API.invoice(id);
+  if (!inv) return;
+  const cname = customerName(inv.customer_id);
+  const win = window.open('', '_blank', 'width=800,height=600');
+  win.document.write(`<!DOCTYPE html><html><head>
+    <title>Invoice ${inv.invoice_number}</title>
+    <style>
+      body{font-family:Arial,sans-serif;margin:40px;color:#111;font-size:14px}
+      .header{display:flex;justify-content:space-between;border-bottom:2px solid #1a472a;padding-bottom:16px;margin-bottom:24px}
+      .logo-text{font-size:22px;font-weight:700;color:#1a472a}
+      .inv-num{font-size:18px;font-weight:600}
+      .badge{display:inline-block;padding:3px 10px;border-radius:4px;font-size:12px;font-weight:600}
+      .Paid{background:#d1fae5;color:#065f46} .Pending{background:#fef3c7;color:#92400e} .Overdue{background:#fee2e2;color:#991b1b}
+      table{width:100%;border-collapse:collapse;margin:16px 0}
+      th{text-align:left;padding:8px;background:#f3f4f6;border-bottom:1px solid #ddd;font-size:12px}
+      td{padding:8px;border-bottom:1px solid #eee}
+      .total-row{display:flex;justify-content:space-between;padding:4px 0;font-size:14px}
+      .total-final{font-weight:700;font-size:16px;border-top:1px solid #ddd;padding-top:8px;margin-top:4px}
+      .totals{max-width:280px;margin-left:auto;margin-top:16px}
+      .footer{margin-top:40px;font-size:12px;color:#666;text-align:center;border-top:1px solid #eee;padding-top:12px}
+      @media print{@page{margin:20mm}}
+    </style></head><body>
+    <div class="header">
+      <div><div class="logo-text">${_app_name}</div><div style="color:#666;font-size:12px">${cfg_company||''}</div></div>
+      <div style="text-align:right">
+        <div class="inv-num">Invoice ${inv.invoice_number}</div>
+        <div class="badge ${inv.status}">${inv.status}</div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-bottom:24px">
+      <div><strong>Bill to:</strong><br>${cname}</div>
+      <div style="text-align:right">
+        <div>Issued: ${fmt_date(inv.issued_date)}</div>
+        <div>Due: ${fmt_date(inv.due_date)}</div>
+        ${inv.paid_date?`<div>Paid: ${fmt_date(inv.paid_date)}</div>`:''}
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>Description</th><th style="text-align:right">Price</th><th style="text-align:center">Qty</th><th style="text-align:right">Amount</th></tr></thead>
+      <tbody>${(inv.items||[]).map(it=>`<tr>
+        <td>${it.description}</td>
+        <td style="text-align:right">${fmt_currency(it.unit_price)}</td>
+        <td style="text-align:center">${it.quantity}</td>
+        <td style="text-align:right">${fmt_currency(it.unit_price*it.quantity)}</td>
+      </tr>`).join('')}</tbody>
+    </table>
+    <div class="totals">
+      <div class="total-row"><span>Subtotal</span><span>${fmt_currency(inv.subtotal)}</span></div>
+      <div class="total-row"><span>Tax (${((inv.tax_rate||0)*100).toFixed(2)}%)</span><span>${fmt_currency(inv.tax_amount)}</span></div>
+      <div class="total-row total-final"><span>Total Due</span><span>${fmt_currency(inv.total)}</span></div>
+    </div>
+    ${inv.notes?`<p style="margin-top:24px;font-size:13px;color:#555">Notes: ${inv.notes}</p>`:''}
+    <div class="footer">Thank you for your business. ${_app_name}</div>
+    <script>window.onload=function(){window.print();setTimeout(()=>window.close(),1000);}<\/script>
+  </body></html>`);
+  win.document.close();
+};
+
+// Store company name for print
+let cfg_company = '';

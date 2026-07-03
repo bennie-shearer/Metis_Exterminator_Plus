@@ -1,249 +1,203 @@
 # API Reference - Metis Exterminator Plus
 
-**Version 2.3.0** | Base URL: `http://2.3.0.1:9100`
+**Version 3.1.0** | Base URL: `https://127.0.0.1:9100`
 
-All request and response bodies are JSON. All endpoints support CORS preflight (OPTIONS).
+All endpoints return `Content-Type: application/json` unless noted.
+Protected endpoints require `Authorization: Bearer <token>` or `X-API-Key: <key>`.
 
 ---
 
 ## Authentication
 
 ### POST /api/auth/login
-
-Authenticate and receive a session token.
-
-**Request**
 ```json
 { "username": "admin", "password": "Admin#2026" }
 ```
-
-**Response 200**
-```json
-{ "token": "a1b2c3d2.3.0." }
-```
-
-**Response 401**
-```json
-{ "error": "invalid credentials" }
-```
+Response: `{ "token": "<256-bit hex>" }`
+Errors: 400 missing fields, 401 invalid credentials, 429 rate limited
 
 ### POST /api/auth/logout
-
-Invalidate a session token.
-
-**Request**
 ```json
-{ "token": "a1b2c3d2.3.0." }
+{ "token": "<token>" }
 ```
-
-**Response 204** (no body)
+Response: 204
 
 ### GET /api/auth/me
+Returns current user: `{ "id": 1, "username": "admin", "role": "admin" }`
 
-Validate the current session and return user info.
-
-**Header:** `Authorization: Bearer <token>`
-
-**Response 200**
+### PUT /api/auth/password
 ```json
-{ "id": 1, "username": "admin", "role": "admin" }
+{ "old_password": "...", "new_password": "..." }
 ```
+Response: `{ "status": "password changed" }`
+
+### POST /api/auth/apikey
+Generates API key for current user.
+Response: `{ "api_key": "mep_<hex>" }`
+
+---
+
+## Users (admin only)
+
+### GET /api/users
+Returns array of `{ id, username, role, active, has_api_key }`.
+
+### POST /api/users
+```json
+{ "username": "tech1", "password": "SecurePass#1", "role": "technician" }
+```
+Response: 201 `{ "status": "created", "username": "tech1", "role": "technician" }`
+Errors: 409 username exists
+
+### DELETE /api/users/:id
+Deactivates user and kills all their sessions. Response: 204.
+
+### PUT /api/users/:id/password
+```json
+{ "new_password": "NewPass#1" }
+```
+Admin force-set password. Response: `{ "status": "password updated" }`.
 
 ---
 
 ## Customers
 
 ### GET /api/customers
-
-Returns all customers. Optional query parameter: `q` (search by name, phone, or email).
-
-**Response 200** - array of customer objects
-
 ### GET /api/customers/:id
-
-**Response 200** - single customer object  
-**Response 404** `{ "error": "not found" }`
-
 ### POST /api/customers
-
-**Request**
 ```json
-{
-  "name": "John Smith",
-  "phone": "(208) 555-0100",
-  "email": "john@example.com",
-  "address": "123 Main St",
-  "city": "Coeur d Alene",
-  "state": "ID",
-  "zip": "83814",
-  "notes": ""
-}
+{ "name":"*", "phone":"", "email":"", "address":"", "city":"", "state":"", "zip":"", "notes":"" }
 ```
-**Response 201** - created customer object
-
 ### PUT /api/customers/:id
-
-Same fields as POST. **Response 200** - updated customer object.
-
-### DELETE /api/customers/:id
-
-**Response 204** (no body)
+### DELETE /api/customers/:id — soft-delete (sets deleted=1)
 
 ---
 
 ## Jobs
 
 ### GET /api/jobs
-
-Optional query parameters: `customer_id`, `status`.
-
-**Response 200** - array of job objects
-
+Query params: `status=Scheduled`, `customer_id=1`
 ### GET /api/jobs/:id
-
-**Response 200** - single job object
-
 ### POST /api/jobs
-
-**Request**
 ```json
-{
-  "customer_id": 1,
-  "service_type": "General Treatment",
-  "pest_type": "Ants",
-  "status": "Scheduled",
-  "scheduled_date": "2026-07-15",
-  "scheduled_time": "09:00",
-  "technician": "Mike Johnson",
-  "address": "123 Main St",
-  "price": 125.00,
-  "notes": ""
-}
+{ "customer_id":1, "service_type":"*", "pest_type":"", "scheduled_date":"YYYY-MM-DD",
+  "scheduled_time":"HH:MM", "technician":"", "address":"", "price":0.0,
+  "status":"Scheduled", "notes":"", "recurring":false, "recur_interval_days":0 }
 ```
-**Response 201** - created job object
-
 ### PUT /api/jobs/:id
-
-Same fields as POST plus optional `completed_at`. **Response 200** - updated job object.
-
 ### DELETE /api/jobs/:id
-
-**Response 204**
 
 ---
 
 ## Invoices
 
 ### GET /api/invoices
-
-Optional query parameter: `customer_id`.
-
-**Response 200** - array of invoice objects (includes `items` array)
-
-### GET /api/invoices/:id
-
-**Response 200** - single invoice object
-
+### GET /api/invoices/:id — includes `items` array
 ### POST /api/invoices
-
-**Request**
 ```json
-{
-  "customer_id": 1,
-  "job_id": 5,
-  "issued_date": "2026-07-15",
-  "due_date": "2026-08-14",
-  "notes": "",
-  "items": [
-    { "description": "General ant treatment", "unit_price": 125.00, "quantity": 1 },
-    { "description": "Bait stations (4)", "unit_price": 12.50, "quantity": 4 }
-  ]
-}
+{ "customer_id":1, "issued_date":"YYYY-MM-DD", "due_date":"YYYY-MM-DD",
+  "notes":"", "items":[{"description":"*","unit_price":0.0,"quantity":1}] }
 ```
-Tax is calculated automatically from `app.tax_rate` in config.pson.
-
-**Response 201** - created invoice with `invoice_number`, `subtotal`, `tax_amount`, `total`
-
 ### PUT /api/invoices/:id
-
-Updatable fields: `status`, `paid_date`, `due_date`, `notes`.
-
-**Response 200** - updated invoice object
-
 ### DELETE /api/invoices/:id
-
-**Response 204**
-
----
-
-## Dashboard
-
-### GET /api/stats
-
-**Response 200**
-```json
-{
-  "customers": 42,
-  "jobs_scheduled": 8,
-  "jobs_completed": 127,
-  "revenue": 15840.00,
-  "outstanding": 1250.00
-}
-```
+### POST /api/invoices/check-overdue
+Marks Pending invoices past due date as Overdue.
+Response: `{ "marked_overdue": 3 }`
 
 ---
 
-## Infrastructure
+## Search
+
+### GET /api/search?q=
+FTS5 full-text search across customers and jobs.
+Response: `{ "customers": [...], "jobs": [...] }`
+
+---
+
+## Export
+
+### GET /api/export/invoices.csv — CSV download
+### GET /api/export/customers.csv — CSV download
+
+---
+
+## System
 
 ### GET /api/version
+Returns app config: `{ version, app, author, company, currency, tax_name, tax_rate, theme }`
 
-```json
-{ "version": "2.3.0", "app": "Metis Exterminator Plus", "author": "Bennie Shearer" }
-```
+### GET /api/logs?lines=100
+Returns last N log lines as JSON array of strings.
+
+### GET /api/audit
+Returns auth-related log lines from log file.
+
+### GET /api/audit/events?limit=100 (admin only)
+Returns audit events from SQLite: `[{ id, event, username, ip, details, success, created_at }]`
+
+### POST /api/admin/rotate-log (admin only)
+Rotates the log file. Response: `{ "status": "log rotated" }`
+
+### GET /api/stats
+Returns `{ customers, jobs_scheduled, jobs_completed, revenue, outstanding }`
 
 ### GET /healthz
-
-Kubernetes liveness probe. Returns `200` when the server is alive.
-
-```json
-{ "status": "alive" }
-```
+Liveness probe. Returns 200.
 
 ### GET /readyz
-
-Kubernetes readiness probe. Returns `200` when the server is ready to serve traffic.
-
-```json
-{ "status": "ready" }
-```
+Readiness probe. Returns 200 when data loaded.
 
 ### GET /metrics
+Prometheus-compatible metrics (text/plain).
 
-Prometheus-compatible text metrics.
-
-```
-# HELP metis_customers_total Total customers
-# TYPE metis_customers_total gauge
-metis_customers_total 42
-# HELP metis_jobs_total Total jobs
-2.3.0.
-```
+### POST /api/shutdown (admin only)
+Flushes all data and stops the server cleanly.
 
 ---
 
-## Job Status Values
+## Chemical Tracking
 
-| Value | Meaning |
-|---|---|
-| Scheduled | Job is booked, not yet started |
-| In Progress | Technician on-site |
-| Completed | Service delivered |
-| Cancelled | Job cancelled |
+### GET /api/jobs/:id/chemicals
+Returns `[{ id, chemical_name, epa_reg, quantity_oz, unit, applied_at }]`
 
-## Invoice Status Values
+### POST /api/jobs/:id/chemicals
+```json
+{ "chemical_name":"Bifenthrin", "epa_reg":"279-3210", "quantity_oz":4.0, "unit":"oz" }
+```
 
-| Value | Meaning |
-|---|---|
-| Pending | Invoice sent, payment not received |
-| Paid | Payment received |
-| Overdue | Past due date, unpaid |
+### DELETE /api/jobs/:id/chemicals/:cid — Response: 204
+
+---
+
+## Technician Time Tracking
+
+### PUT /api/jobs/:id/time
+```json
+{ "time_start":"08:30", "time_end":"10:15" }
+```
+Sets `time_start`/`time_end`. Auto-sets status to `In Progress` when start time is recorded.
+
+---
+
+## Recurring Jobs
+
+### POST /api/jobs/:id/spawn-recurring
+Creates next occurrence of a recurring job using `recur_interval_days`.
+Response: `{ "id": 42, "scheduled_date": "2026-08-02" }`
+
+---
+
+## Email Notifications
+
+### POST /api/invoices/:id/send-email
+Queues invoice email to customer's email address.
+Response: `{ "status": "queued", "to": "...", "invoice": "INV-1001", "note": "..." }`
+Configure `email.*` in config.pson. SMTP library integration required for actual delivery.
+
+---
+
+## Route Optimization
+
+### GET /api/route/optimize?date=YYYY-MM-DD&technician=Name
+Returns scheduled/in-progress jobs for the date and technician, sorted by address.
+Response: `[{ id, customer_id, service_type, address, technician, scheduled_time }]`

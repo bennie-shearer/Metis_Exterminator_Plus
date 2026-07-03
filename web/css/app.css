@@ -272,3 +272,39 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
 /* Shutdown pill button in dropdown */
 .user-dropdown-item.shutdown{color:#fca5a5}
 .user-dropdown-item.shutdown:hover{background:rgba(185,28,28,0.3);color:#fca5a5}
+
+/* ===== CALENDAR ===== */
+.calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;background:var(--border)}
+.cal-header-cell{background:var(--surface);padding:8px 4px;text-align:center;font-size:12px;font-weight:500;color:var(--text-secondary)}
+.cal-cell{background:var(--surface);min-height:80px;padding:4px;font-size:12px;vertical-align:top}
+.cal-cell.other-month{background:var(--surface-0);color:var(--text-muted)}
+.cal-cell.today{outline:2px solid var(--green-accent)}
+.cal-day-num{font-weight:500;margin-bottom:2px;color:var(--text-secondary);font-size:11px}
+.cal-event{background:#1a472a;color:#6ee7b7;border-radius:3px;padding:2px 4px;margin-bottom:2px;font-size:10px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cal-event:hover{background:#2d6a4f}
+
+/* ===== PAGINATION ===== */
+.pagination{display:flex;align-items:center;gap:8px;justify-content:center;margin-top:1.5rem}
+.pagination button{min-width:32px;padding:4px 10px}
+.pagination .page-info{font-size:13px;color:var(--text-muted)}
+
+/* ===== CHEMICAL TRACKING ===== */
+.chemical-row{display:grid;grid-template-columns:1fr 100px 80px 70px auto;gap:8px;align-items:center;margin-bottom:8px}
+
+/* ===== PRINT STYLES ===== */
+@media print {
+  .navbar, .user-menu, .nav-actions, .security-bar,
+  .btn-primary, .btn-secondary, .btn-danger, .btn-icon,
+  .modal-overlay, #btn-export, #btn-theme,
+  .actions, button { display: none !important; }
+  body { background: #fff !important; color: #000 !important; }
+  .view { display: block !important; }
+  .view:not(.active) { display: none !important; }
+  .main-content { padding: 0 !important; }
+  .data-table th { background: #f3f4f6 !important; color: #000 !important; }
+  .calendar-grid { background: #ddd !important; }
+  .cal-cell { background: #fff !important; min-height: 60px; }
+  .cal-event { background: #1a472a !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .cal-header-cell { background: #f3f4f6 !important; color: #000 !important; }
+  @page { margin: 15mm; }
+}

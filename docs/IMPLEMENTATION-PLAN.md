@@ -1,10 +1,10 @@
 # Implementation Plan - Metis Exterminator Plus
 
-**Version 2.3.0**
+**Version 3.1.0**
 
 ---
 
-## Phase 1 — Foundation (COMPLETE: v1.0.0)
+## Phase 1 — Foundation (COMPLETE: v3.1.0)
 
 - [x] C++20 HTTP server (zero external dependencies)
 - [x] PSON configuration system
@@ -13,7 +13,7 @@
 - [x] Dashboard with stats and upcoming jobs
 - [x] CMake + Ninja build for Windows/Linux/macOS
 
-## Phase 2 — Security and Reliability (COMPLETE: v2.0.0 - v2.3.0)
+## Phase 2 — Security and Reliability (COMPLETE: v3.1.0 - v3.1.0)
 
 - [x] SQLite database with WAL mode
 - [x] bcrypt-12 password hashing (Solar Designer implementation)
@@ -28,16 +28,16 @@
 - [x] Server-only client — removed offline/localStorage data mode; server required
 - [x] Full 17-document Metis Docs Model
 
-## Phase 3 — Full SQLite Migration (Planned: v2.4.0)
+## Phase 3 — Full SQLite Migration (Planned: v3.1.0)
 
-- [ ] Migrate CustomerStore, JobStore, InvoiceStore to SQLite
+- [x] Migrate CustomerStore, JobStore, InvoiceStore to SQLite
 - [ ] Retire flat-file `.dat` stores
-- [ ] FTS5 full-text search
+- [x] FTS5 full-text search
 - [ ] `POST /api/users` — user management API
 - [ ] `PUT /api/auth/password` — change password
-- [ ] Role-based API access control
+- [x] Role-based API access control
 
-## Phase 4 — Business Completeness (Planned: v2.5.0)
+## Phase 4 — Business Completeness (Planned: v3.1.0)
 
 - [ ] Recurring service scheduling
 - [ ] Automatic overdue invoice detection
@@ -46,7 +46,7 @@
 - [ ] Print-optimized invoice layout
 - [ ] Email notification hooks
 
-## Phase 5 — Infrastructure Activation (Planned: v3.0.0)
+## Phase 5 — Infrastructure Activation (Planned: v3.1.0)
 
 - [ ] GPU analytics (Windows CUDA/OpenCL, Linux ROCm, macOS Metal)
 - [ ] Kubernetes deployment manifests
@@ -54,7 +54,7 @@
 - [ ] Log rotation
 - [ ] Structured JSON logging
 
-## Phase 6 — Commercial Readiness (Planned: v4.0.0)
+## Phase 6 — Commercial Readiness (Planned: v3.1.0)
 
 - [ ] Payment processing integration
 - [ ] QuickBooks export

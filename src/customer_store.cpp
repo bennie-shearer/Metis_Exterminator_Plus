@@ -1,125 +1,110 @@
 #include "customer_store.hpp"
-#include <fstream>
-#include <sstream>
-#include <algorithm>
-#include <chrono>
-#include <iomanip>
+#include "logger.hpp"
+#include <stdexcept>
 
-static std::string now_iso() {
-    auto t = std::chrono::system_clock::now();
-    std::time_t tt = std::chrono::system_clock::to_time_t(t);
-    std::ostringstream os;
-    os << std::put_time(std::gmtime(&tt), "%Y-%m-%dT%H:%M:%SZ");
-    return os.str();
-}
+CustomerStore::CustomerStore(Database& db) : db_(db) {}
 
-std::string CustomerStore::esc(const std::string& s) {
-    std::string r;
-    for (char c : s) {
-        if (c == '|') r += "\\p";
-        else if (c == '\\') r += "\\\\";
-        else r += c;
-    }
-    return r;
-}
-
-std::string CustomerStore::unesc(const std::string& s) {
-    std::string r;
-    for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '\\' && i + 1 < s.size()) {
-            if (s[i+1] == 'p') { r += '|'; ++i; }
-            else if (s[i+1] == '\\') { r += '\\'; ++i; }
-            else r += s[i];
-        } else r += s[i];
-    }
-    return r;
-}
-
-std::string CustomerStore::serialize(const Customer& c) const {
-    std::ostringstream os;
-    os << c.id << '|' << esc(c.name) << '|' << esc(c.phone) << '|'
-       << esc(c.email) << '|' << esc(c.address) << '|' << esc(c.city) << '|'
-       << esc(c.state) << '|' << esc(c.zip) << '|' << esc(c.notes) << '|'
-       << c.created_at << '|' << (c.active ? '1' : '0');
-    return os.str();
-}
-
-void CustomerStore::parse_line(const std::string& line) {
-    if (line.empty() || line[0] == '#') return;
-    std::vector<std::string> f;
-    std::string tok;
-    for (char ch : line) {
-        if (ch == '|') { f.push_back(tok); tok.clear(); }
-        else tok += ch;
-    }
-    f.push_back(tok);
-    if (f.size() < 11) return;
+static Customer row_to_customer(Database::Stmt& st) {
     Customer c;
-    try { c.id = std::stoi(f[0]); } catch (...) { return; }
-    c.name = unesc(f[1]);
-    c.phone = unesc(f[2]);
-    c.email = unesc(f[3]);
-    c.address = unesc(f[4]);
-    c.city = unesc(f[5]);
-    c.state = unesc(f[6]);
-    c.zip = unesc(f[7]);
-    c.notes = unesc(f[8]);
-    c.created_at = f[9];
-    c.active = (f[10] == "1");
-    if (c.id >= next_id_) next_id_ = c.id + 1;
-    customers_.push_back(std::move(c));
-}
-
-bool CustomerStore::load(const std::string& data_dir) {
-    path_ = data_dir + "/customers.dat";
-    std::ifstream f(path_);
-    if (!f) return true;
-    std::string line;
-    while (std::getline(f, line)) parse_line(line);
-    return true;
-}
-
-bool CustomerStore::save() {
-    std::ofstream f(path_);
-    if (!f) return false;
-    std::lock_guard<std::mutex> lk(mu_);
-    for (const auto& c : customers_) f << serialize(c) << '\n';
-    return true;
+    c.id         = st.col_int(0);
+    c.name       = st.col_text(1);
+    c.phone      = st.col_text(2);
+    c.email      = st.col_text(3);
+    c.address    = st.col_text(4);
+    c.city       = st.col_text(5);
+    c.state      = st.col_text(6);
+    c.zip        = st.col_text(7);
+    c.notes      = st.col_text(8);
+    c.active     = st.col_int(9) != 0;
+    c.deleted    = st.col_int(10) != 0;
+    c.created_at = st.col_text(11);
+    c.updated_at = st.col_text(12);
+    return c;
 }
 
 std::vector<Customer> CustomerStore::all() const {
-    std::lock_guard<std::mutex> lk(mu_);
-    return customers_;
+    std::vector<Customer> result;
+    try {
+        Database::Stmt st(db_.handle(),
+            "SELECT id,name,phone,email,address,city,state,zip,notes,active,deleted,created_at,updated_at "
+            "FROM customers WHERE deleted=0 ORDER BY name COLLATE NOCASE");
+        while (st.step()) result.push_back(row_to_customer(st));
+    } catch (const std::exception& e) { LOGE("[customers] all: " << e.what()); }
+    return result;
 }
 
 std::optional<Customer> CustomerStore::find(int id) const {
-    std::lock_guard<std::mutex> lk(mu_);
-    for (const auto& c : customers_)
-        if (c.id == id) return c;
-    return {};
+    try {
+        Database::Stmt st(db_.handle(),
+            "SELECT id,name,phone,email,address,city,state,zip,notes,active,deleted,created_at,updated_at "
+            "FROM customers WHERE id=?");
+        st.bind_int(1, id);
+        if (!st.step()) return {};
+        return row_to_customer(st);
+    } catch (...) { return {}; }
 }
 
 Customer CustomerStore::add(Customer c) {
-    std::lock_guard<std::mutex> lk(mu_);
-    c.id = next_id_++;
-    c.created_at = now_iso();
-    customers_.push_back(c);
+    try {
+        Database::Stmt st(db_.handle(),
+            "INSERT INTO customers(name,phone,email,address,city,state,zip,notes) "
+            "VALUES(?,?,?,?,?,?,?,?) RETURNING id,created_at");
+        st.bind_text(1,c.name); st.bind_text(2,c.phone); st.bind_text(3,c.email);
+        st.bind_text(4,c.address); st.bind_text(5,c.city); st.bind_text(6,c.state);
+        st.bind_text(7,c.zip); st.bind_text(8,c.notes);
+        if (st.step()) { c.id = st.col_int(0); c.created_at = st.col_text(1); }
+        // Update FTS
+        Database::Stmt fts(db_.handle(),
+            "INSERT INTO customers_fts(rowid,name,phone,email,address,city,notes) VALUES(?,?,?,?,?,?,?)");
+        fts.bind_int(1,c.id); fts.bind_text(2,c.name); fts.bind_text(3,c.phone);
+        fts.bind_text(4,c.email); fts.bind_text(5,c.address); fts.bind_text(6,c.city);
+        fts.bind_text(7,c.notes); fts.step();
+    } catch (const std::exception& e) { LOGE("[customers] add: " << e.what()); }
     return c;
 }
 
 bool CustomerStore::update(const Customer& c) {
-    std::lock_guard<std::mutex> lk(mu_);
-    for (auto& x : customers_) {
-        if (x.id == c.id) { x = c; return true; }
-    }
-    return false;
+    try {
+        Database::Stmt st(db_.handle(),
+            "UPDATE customers SET name=?,phone=?,email=?,address=?,city=?,state=?,zip=?,notes=?,"
+            "updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?");
+        st.bind_text(1,c.name); st.bind_text(2,c.phone); st.bind_text(3,c.email);
+        st.bind_text(4,c.address); st.bind_text(5,c.city); st.bind_text(6,c.state);
+        st.bind_text(7,c.zip); st.bind_text(8,c.notes); st.bind_int(9,c.id);
+        st.step();
+        // Update FTS
+        Database::Stmt fd(db_.handle(), "DELETE FROM customers_fts WHERE rowid=?");
+        fd.bind_int(1,c.id); fd.step();
+        Database::Stmt fi(db_.handle(),
+            "INSERT INTO customers_fts(rowid,name,phone,email,address,city,notes) VALUES(?,?,?,?,?,?,?)");
+        fi.bind_int(1,c.id); fi.bind_text(2,c.name); fi.bind_text(3,c.phone);
+        fi.bind_text(4,c.email); fi.bind_text(5,c.address); fi.bind_text(6,c.city);
+        fi.bind_text(7,c.notes); fi.step();
+        return true;
+    } catch (const std::exception& e) { LOGE("[customers] update: " << e.what()); return false; }
 }
 
 bool CustomerStore::remove(int id) {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = std::remove_if(customers_.begin(), customers_.end(),
-        [id](const Customer& c){ return c.id == id; });
-    if (it == customers_.end()) return false;
-    customers_.erase(it, customers_.end());
-    return true;
+    try {
+        Database::Stmt st(db_.handle(), "UPDATE customers SET deleted=1 WHERE id=?");
+        st.bind_int(1,id); st.step();
+        Database::Stmt fd(db_.handle(), "DELETE FROM customers_fts WHERE rowid=?");
+        fd.bind_int(1,id); fd.step();
+        return true;
+    } catch (...) { return false; }
+}
+
+bool CustomerStore::hard_delete(int id) {
+    try {
+        Database::Stmt st(db_.handle(), "DELETE FROM customers WHERE id=?");
+        st.bind_int(1,id); st.step(); return true;
+    } catch (...) { return false; }
+}
+
+void CustomerStore::rebuild_fts() {
+    try {
+        db_.exec("DELETE FROM customers_fts");
+        db_.exec("INSERT INTO customers_fts(rowid,name,phone,email,address,city,notes) "
+                 "SELECT id,name,phone,email,address,city,notes FROM customers WHERE deleted=0");
+    } catch (const std::exception& e) { LOGE("[customers] rebuild_fts: " << e.what()); }
 }

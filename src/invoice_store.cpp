@@ -1,171 +1,160 @@
 #include "invoice_store.hpp"
-#include <fstream>
+#include "logger.hpp"
 #include <sstream>
-#include <algorithm>
-#include <chrono>
-#include <iomanip>
+#include <stdexcept>
 
-static std::string now_iso_inv() {
-    auto t = std::chrono::system_clock::now();
-    std::time_t tt = std::chrono::system_clock::to_time_t(t);
-    std::ostringstream os;
-    os << std::put_time(std::gmtime(&tt), "%Y-%m-%dT%H:%M:%SZ");
-    return os.str();
+InvoiceStore::InvoiceStore(Database& db) : db_(db) {}
+
+void InvoiceStore::load_items(Invoice& inv) const {
+    try {
+        Database::Stmt st(db_.handle(),
+            "SELECT id,description,unit_price,quantity FROM invoice_items WHERE invoice_id=? ORDER BY id");
+        st.bind_int(1, inv.id);
+        while (st.step()) {
+            InvoiceItem it;
+            it.id          = st.col_int(0);
+            it.description = st.col_text(1);
+            it.unit_price  = st.col_double(2);
+            it.quantity    = st.col_int(3);
+            inv.items.push_back(it);
+        }
+    } catch (...) {}
 }
 
-std::string InvoiceStore::esc(const std::string& s) {
-    std::string r;
-    for (char c : s) {
-        if (c == '|') r += "\\p";
-        else if (c == '^') r += "\\c";
-        else if (c == '\\') r += "\\\\";
-        else r += c;
-    }
-    return r;
-}
-
-std::string InvoiceStore::unesc(const std::string& s) {
-    std::string r;
-    for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '\\' && i + 1 < s.size()) {
-            if (s[i+1] == 'p') { r += '|'; ++i; }
-            else if (s[i+1] == 'c') { r += '^'; ++i; }
-            else if (s[i+1] == '\\') { r += '\\'; ++i; }
-            else r += s[i];
-        } else r += s[i];
-    }
-    return r;
-}
-
-std::string InvoiceStore::serialize(const Invoice& inv) const {
-    std::ostringstream os;
-    std::string items_str;
-    for (size_t i = 0; i < inv.items.size(); ++i) {
-        if (i > 0) items_str += '^';
-        items_str += esc(inv.items[i].description) + '~'
-                   + std::to_string(inv.items[i].unit_price) + '~'
-                   + std::to_string(inv.items[i].quantity);
-    }
-    os << inv.id << '|' << inv.customer_id << '|' << inv.job_id << '|'
-       << esc(inv.invoice_number) << '|' << esc(inv.status) << '|'
-       << esc(items_str) << '|'
-       << inv.subtotal << '|' << inv.tax_rate << '|' << inv.tax_amount << '|'
-       << inv.total << '|' << esc(inv.issued_date) << '|' << esc(inv.due_date) << '|'
-       << esc(inv.paid_date) << '|' << esc(inv.notes) << '|' << inv.created_at;
-    return os.str();
-}
-
-void InvoiceStore::parse_line(const std::string& line) {
-    if (line.empty() || line[0] == '#') return;
-    std::vector<std::string> f;
-    std::string tok;
-    for (char ch : line) {
-        if (ch == '|') { f.push_back(tok); tok.clear(); }
-        else tok += ch;
-    }
-    f.push_back(tok);
-    if (f.size() < 15) return;
+static Invoice row_to_invoice(Database::Stmt& st) {
     Invoice inv;
-    try { inv.id = std::stoi(f[0]); } catch (...) { return; }
-    try { inv.customer_id = std::stoi(f[1]); } catch (...) {}
-    try { inv.job_id = std::stoi(f[2]); } catch (...) {}
-    inv.invoice_number = unesc(f[3]);
-    inv.status = unesc(f[4]);
-    std::string items_raw = unesc(f[5]);
-    std::istringstream iss(items_raw);
-    std::string item_tok;
-    while (std::getline(iss, item_tok, '^')) {
-        if (item_tok.empty()) continue;
-        std::vector<std::string> ip;
-        std::string ipart;
-        for (char c : item_tok) {
-            if (c == '~') { ip.push_back(ipart); ipart.clear(); }
-            else ipart += c;
-        }
-        ip.push_back(ipart);
-        if (ip.size() >= 3) {
-            InvoiceItem ii;
-            ii.description = unesc(ip[0]);
-            try { ii.unit_price = std::stod(ip[1]); } catch (...) {}
-            try { ii.quantity = std::stoi(ip[2]); } catch (...) { ii.quantity = 1; }
-            inv.items.push_back(ii);
-        }
-    }
-    try { inv.subtotal = std::stod(f[6]); } catch (...) {}
-    try { inv.tax_rate = std::stod(f[7]); } catch (...) {}
-    try { inv.tax_amount = std::stod(f[8]); } catch (...) {}
-    try { inv.total = std::stod(f[9]); } catch (...) {}
-    inv.issued_date = unesc(f[10]);
-    inv.due_date = unesc(f[11]);
-    inv.paid_date = unesc(f[12]);
-    inv.notes = unesc(f[13]);
-    inv.created_at = f[14];
-    if (inv.id >= next_id_) next_id_ = inv.id + 1;
-    invoices_.push_back(std::move(inv));
+    inv.id             = st.col_int(0);
+    inv.customer_id    = st.col_int(1);
+    inv.job_id         = st.col_int(2);
+    inv.invoice_number = st.col_text(3);
+    inv.status         = st.col_text(4);
+    inv.subtotal       = st.col_double(5);
+    inv.tax_rate       = st.col_double(6);
+    inv.tax_amount     = st.col_double(7);
+    inv.total          = st.col_double(8);
+    inv.issued_date    = st.col_text(9);
+    inv.due_date       = st.col_text(10);
+    inv.paid_date      = st.col_text(11);
+    inv.notes          = st.col_text(12);
+    inv.created_at     = st.col_text(13);
+    return inv;
 }
 
-bool InvoiceStore::load(const std::string& data_dir) {
-    path_ = data_dir + "/invoices.dat";
-    std::ifstream f(path_);
-    if (!f) return true;
-    std::string line;
-    while (std::getline(f, line)) parse_line(line);
-    return true;
-}
-
-bool InvoiceStore::save() {
-    std::ofstream f(path_);
-    if (!f) return false;
-    std::lock_guard<std::mutex> lk(mu_);
-    for (const auto& inv : invoices_) f << serialize(inv) << '\n';
-    return true;
-}
+static const char* INV_SELECT =
+    "SELECT id,customer_id,job_id,invoice_number,status,subtotal,tax_rate,tax_amount,"
+    "total,issued_date,due_date,paid_date,notes,created_at FROM invoices";
 
 std::vector<Invoice> InvoiceStore::all() const {
-    std::lock_guard<std::mutex> lk(mu_);
-    return invoices_;
+    std::vector<Invoice> result;
+    try {
+        Database::Stmt st(db_.handle(), std::string(INV_SELECT) + " ORDER BY created_at DESC");
+        while (st.step()) {
+            auto inv = row_to_invoice(st);
+            load_items(inv);
+            result.push_back(inv);
+        }
+    } catch (const std::exception& e) { LOGE("[invoices] all: " << e.what()); }
+    return result;
 }
 
-std::vector<Invoice> InvoiceStore::for_customer(int cid) const {
-    std::lock_guard<std::mutex> lk(mu_);
-    std::vector<Invoice> out;
-    for (const auto& inv : invoices_)
-        if (inv.customer_id == cid) out.push_back(inv);
-    return out;
+std::vector<Invoice> InvoiceStore::for_customer(int customer_id) const {
+    std::vector<Invoice> result;
+    try {
+        Database::Stmt st(db_.handle(),
+            std::string(INV_SELECT) + " WHERE customer_id=? ORDER BY created_at DESC");
+        st.bind_int(1, customer_id);
+        while (st.step()) {
+            auto inv = row_to_invoice(st);
+            load_items(inv);
+            result.push_back(inv);
+        }
+    } catch (...) {}
+    return result;
 }
 
 std::optional<Invoice> InvoiceStore::find(int id) const {
-    std::lock_guard<std::mutex> lk(mu_);
-    for (const auto& inv : invoices_)
-        if (inv.id == id) return inv;
-    return {};
+    try {
+        Database::Stmt st(db_.handle(), std::string(INV_SELECT) + " WHERE id=?");
+        st.bind_int(1, id);
+        if (!st.step()) return {};
+        auto inv = row_to_invoice(st);
+        load_items(inv);
+        return inv;
+    } catch (...) { return {}; }
 }
 
 Invoice InvoiceStore::add(Invoice inv, const std::string& prefix, int& next_num) {
-    std::lock_guard<std::mutex> lk(mu_);
-    inv.id = next_id_++;
-    inv.created_at = now_iso_inv();
-    std::ostringstream num;
-    num << prefix << "-" << std::setfill('0') << std::setw(5) << next_num++;
-    inv.invoice_number = num.str();
+    // Build invoice number
+    if (inv.invoice_number.empty()) {
+        std::ostringstream os;
+        os << prefix << "-" << next_num++;
+        inv.invoice_number = os.str();
+    }
+    // Compute totals
+    inv.subtotal = 0.0;
+    for (const auto& it : inv.items)
+        inv.subtotal += it.unit_price * it.quantity;
+    inv.tax_amount = inv.subtotal * inv.tax_rate;
+    inv.total      = inv.subtotal + inv.tax_amount;
     if (inv.status.empty()) inv.status = "Pending";
-    invoices_.push_back(inv);
+    try {
+        Database::Stmt st(db_.handle(),
+            "INSERT INTO invoices(customer_id,job_id,invoice_number,status,subtotal,"
+            "tax_rate,tax_amount,total,issued_date,due_date,notes) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id,created_at");
+        st.bind_int(1,inv.customer_id); st.bind_int(2,inv.job_id);
+        st.bind_text(3,inv.invoice_number); st.bind_text(4,inv.status);
+        st.bind_double(5,inv.subtotal); st.bind_double(6,inv.tax_rate);
+        st.bind_double(7,inv.tax_amount); st.bind_double(8,inv.total);
+        st.bind_text(9,inv.issued_date); st.bind_text(10,inv.due_date);
+        st.bind_text(11,inv.notes);
+        if (st.step()) { inv.id = st.col_int(0); inv.created_at = st.col_text(1); }
+        // Insert items
+        for (auto& it : inv.items) {
+            Database::Stmt si(db_.handle(),
+                "INSERT INTO invoice_items(invoice_id,description,unit_price,quantity) "
+                "VALUES(?,?,?,?) RETURNING id");
+            si.bind_int(1,inv.id); si.bind_text(2,it.description);
+            si.bind_double(3,it.unit_price); si.bind_int(4,it.quantity);
+            if (si.step()) it.id = si.col_int(0);
+        }
+    } catch (const std::exception& e) { LOGE("[invoices] add: " << e.what()); }
     return inv;
 }
 
 bool InvoiceStore::update(const Invoice& inv) {
-    std::lock_guard<std::mutex> lk(mu_);
-    for (auto& x : invoices_) {
-        if (x.id == inv.id) { x = inv; return true; }
-    }
-    return false;
+    // Recompute totals
+    double sub = 0.0;
+    for (const auto& it : inv.items) sub += it.unit_price * it.quantity;
+    double tax = sub * inv.tax_rate;
+    double tot = sub + tax;
+    try {
+        Database::Stmt st(db_.handle(),
+            "UPDATE invoices SET status=?,subtotal=?,tax_rate=?,tax_amount=?,total=?,"
+            "issued_date=?,due_date=?,paid_date=?,notes=? WHERE id=?");
+        st.bind_text(1,inv.status); st.bind_double(2,sub);
+        st.bind_double(3,inv.tax_rate); st.bind_double(4,tax);
+        st.bind_double(5,tot); st.bind_text(6,inv.issued_date);
+        st.bind_text(7,inv.due_date); st.bind_text(8,inv.paid_date);
+        st.bind_text(9,inv.notes); st.bind_int(10,inv.id);
+        st.step();
+        // Replace items
+        Database::Stmt di(db_.handle(), "DELETE FROM invoice_items WHERE invoice_id=?");
+        di.bind_int(1,inv.id); di.step();
+        for (const auto& it : inv.items) {
+            Database::Stmt si(db_.handle(),
+                "INSERT INTO invoice_items(invoice_id,description,unit_price,quantity) VALUES(?,?,?,?)");
+            si.bind_int(1,inv.id); si.bind_text(2,it.description);
+            si.bind_double(3,it.unit_price); si.bind_int(4,it.quantity);
+            si.step();
+        }
+        return true;
+    } catch (const std::exception& e) { LOGE("[invoices] update: " << e.what()); return false; }
 }
 
 bool InvoiceStore::remove(int id) {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = std::remove_if(invoices_.begin(), invoices_.end(),
-        [id](const Invoice& inv){ return inv.id == id; });
-    if (it == invoices_.end()) return false;
-    invoices_.erase(it, invoices_.end());
-    return true;
+    try {
+        Database::Stmt st(db_.handle(), "DELETE FROM invoices WHERE id=?");
+        st.bind_int(1,id); st.step(); return true;
+    } catch (...) { return false; }
 }

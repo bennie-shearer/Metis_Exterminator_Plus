@@ -1,6 +1,6 @@
 # Architecture - Metis Exterminator Plus
 
-**Version 2.3.0**
+**Version 3.1.0**
 
 ---
 
@@ -52,7 +52,7 @@ Session-based authentication. Hashes passwords with bcrypt (bundled). Generates 
 ### src/customer_store.hpp / customer_store.cpp
 ### src/job_store.hpp / job_store.cpp
 ### src/invoice_store.hpp / invoice_store.cpp
-Flat-file data stores (pipe-delimited, escape-safe). Loaded at startup, flushed on change and at shutdown. Will be retired in v2.4.0 when full SQLite migration is complete.
+Flat-file data stores (pipe-delimited, escape-safe). Loaded at startup, flushed on change and at shutdown. Will be retired in v3.1.0 when full SQLite migration is complete.
 
 ### third_party/sqlite/
 SQLite 3 amalgamation (sqlite3.c, sqlite3.h). Compiled as a C source file with SQLITE_THREADSAFE=1.

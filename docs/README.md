@@ -1,6 +1,6 @@
 # Metis Exterminator Plus
 
-**Version 2.3.0** | MIT License | C++20 | Windows / Linux / macOS
+**Version 3.1.0** | MIT License | C++20 | Windows / Linux / macOS
 
 A professional pest control business management system built on C++20 with a
 vanilla-JavaScript browser client. Part of the Metis Suite family.

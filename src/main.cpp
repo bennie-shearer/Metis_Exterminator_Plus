@@ -98,11 +98,14 @@ int main() {
     int bcrypt_cost        = cfg.get_int("app","bcrypt_cost", 12);
     int session_min        = cfg.get_int("app","session_timeout_minutes", 60);
     int purge_min          = cfg.get_int("session","purge_interval_minutes", 10);
+    int max_attempts       = cfg.get_int("auth","max_login_attempts", 5);
+    int lockout_min        = cfg.get_int("auth","lockout_minutes", 15);
+    int rate_limit         = cfg.get_int("security","rate_limit_login_per_minute", 10);
     std::string admin_user = cfg.get_or("auth","admin_user","admin");
     std::string admin_pass = cfg.get_or("auth","admin_password","Admin#2026");
     std::string admin_role = cfg.get_or("auth","admin_role","admin");
 
-    AuthManager auth(db, bcrypt_cost, session_min);
+    AuthManager auth(db, bcrypt_cost, session_min, max_attempts, lockout_min, rate_limit);
     bool reset_ok = auth.reset_admin(admin_user, admin_pass, admin_role);
     LOGI("[auth] Admin reset from PSON: " << (reset_ok ? "OK" : "FAILED")
          << "  user=" << admin_user
@@ -110,14 +113,15 @@ int main() {
          << "  role=" << admin_role
          << "  bcrypt_cost=" << bcrypt_cost);
 
-    // Flat-file stores (compatibility / export-import)
-    std::string d_dir_rel = cfg.get_or("server","data_dir","data");
-    fs::path data_dir = base / d_dir_rel;
-    fs::create_directories(data_dir);
+    // SQLite-backed stores (flat .dat files retired)
+    CustomerStore customers(db);
+    JobStore      jobs(db);
+    InvoiceStore  invoices(db);
 
-    CustomerStore customers; customers.load(data_dir.string());
-    JobStore      jobs;      jobs.load(data_dir.string());
-    InvoiceStore  invoices;  invoices.load(data_dir.string());
+    // Rebuild FTS indexes on startup
+    customers.rebuild_fts();
+    jobs.rebuild_fts();
+    LOGI("[db] Stores initialized from SQLite");
 
     // HTTP server
     std::string host      = cfg.get_or("server","host","127.0.0.1");
@@ -195,9 +199,6 @@ int main() {
     srv.run();
 
     LOGI("Shutting down cleanly...");
-    customers.save();
-    jobs.save();
-    invoices.save();
     db.close();
     return 0;
 }
